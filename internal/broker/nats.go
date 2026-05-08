@@ -7,17 +7,15 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// We expose the connection and JetStream context globally for our services to use
 var (
 	NC *nats.Conn
 	JS nats.JetStreamContext
 )
 
-// Connect initializes the NATS connection and JetStream
 func Connect() error {
 	natsURL := os.Getenv("NATS_URL")
 	if natsURL == "" {
-		natsURL = nats.DefaultURL // Fallback if the .env isn't loaded properly
+		natsURL = nats.DefaultURL 
 	}
 
 	// 1. Connect to the core NATS server

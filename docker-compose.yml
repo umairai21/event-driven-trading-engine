@@ -1,13 +1,12 @@
 version: '3.8'
 
 services:
-  # The Message Broker
   nats:
     image: nats:alpine
     ports:
-      - "4222:4222" # Client port for your Go services to connect
-      - "8222:8222" # HTTP management port
-    command: ["-js"] # This flag is crucial: it enables JetStream
+      - "4222:4222" 
+      - "8222:8222" 
+    command: ["-js"] 
 
   # The Relational Database
   postgres:
@@ -22,4 +21,4 @@ services:
       - pgdata:/var/lib/postgresql/data
 
 volumes:
-  pgdata: # This ensures your database data isn't lost when you stop the container
+  pgdata: 

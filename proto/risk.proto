@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+// This tells Protobuf where to save the generated Go code
+option go_package = "github.com/umairai21/event-driven-trading-engine/internal/pb";
+
+package risk;
+
+// The Service Definition (The Phone Line)
+service RiskService {
+    // The Execution Service calls this, sends a RiskRequest, and waits for a RiskResponse
+    rpc CheckAccount (RiskRequest) returns (RiskResponse);
+}
+
+// The Data we send (The Question)
+message RiskRequest {
+    int32 user_id = 1;
+    double total_cost = 2;
+}
+
+// The Data we get back (The Answer)
+message RiskResponse {
+    bool is_approved = 1;
+    string reason = 2;
+}-

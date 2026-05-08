@@ -3,7 +3,8 @@ package main
 import (
 	"encoding/json"
 	"log"
-	"math/rand"
+	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -13,8 +14,13 @@ import (
 	"github.com/umairai21/event-driven-trading-engine/internal/models"
 )
 
+
+type BinancePrice struct {
+	Symbol string `json:"symbol"`
+	Price  string `json:"price"` 
+}
+
 func main() {
-	// 1. Initialize Infrastructure
 	_ = godotenv.Load()
 	if err := database.Connect(); err != nil {
 		log.Fatalf("❌ Database connection failed: %v", err)
@@ -23,55 +29,80 @@ func main() {
 		log.Fatalf("❌ NATS connection failed: %v", err)
 	}
 
-	// 2. Configure NATS JetStream
 	setupJetStream()
 
-	log.Println("📈 Market Data Service is running. Publishing prices...")
+	maxIterations := 15
+	log.Printf("📈 LIVE Market Data Service running. Fetching from Binance %d times...", maxIterations)
 
-	// 3. The Infinite Publishing Loop
-	tickers := []string{"AAPL", "TSLA", "GOOG"}
+	client := &http.Client{Timeout: 10 * time.Second}
 
-	for {
-		for _, ticker := range tickers {
-			// Simulate a realistic-ish price using math/rand
-			simulatedPrice := 100.0 + (rand.Float64() * 50.0) 
+	for i := 1; i <= maxIterations; i++ {
+		log.Printf("--- Fetch Cycle %d of %d ---", i, maxIterations)
+		fetchAndPublishPrices(client)
+		time.Sleep(5 * time.Second)
+	}
 
-			tick := models.PriceTick{
-				Ticker:    ticker,
-				Price:     simulatedPrice,
-				Timestamp: time.Now(),
-			}
+	log.Println("🛑 Reached API cap limit. Market Data Service shutting down cleanly.")
+}
 
-			// Convert our Go Struct into JSON bytes
-			jsonData, err := json.Marshal(tick)
-			if err != nil {
-				log.Printf("⚠️ Failed to marshal JSON: %v", err)
-				continue
-			}
+func fetchAndPublishPrices(client *http.Client) {
+	url := `https://api.binance.com/api/v3/ticker/price?symbols=["BTCUSDT","ETHUSDT","SOLUSDT"]`
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("⚠️ Failed to create request: %v", err)
+		return
+	}
 
-			// Publish to JetStream on a specific "Subject" (e.g., MARKET.prices.AAPL)
-			subject := "MARKET.prices." + ticker
-			_, err = broker.JS.Publish(subject, jsonData)
-			if err != nil {
-				log.Printf("⚠️ Failed to publish to NATS: %v", err)
-			} else {
-				log.Printf("📡 Published %s: $%.2f", ticker, simulatedPrice)
-			}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("⚠️ API request failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("⚠️ API Error: Received HTTP Status %d", resp.StatusCode)
+		return
+	}
+
+	var binanceData []BinancePrice
+	if err := json.NewDecoder(resp.Body).Decode(&binanceData); err != nil {
+		log.Printf("⚠️ Failed to parse API JSON: %v", err)
+		return
+	}
+
+	for _, item := range binanceData {
+		priceFloat, err := strconv.ParseFloat(item.Price, 64)
+		if err != nil {
+			continue
 		}
 
-		// Wait 2 seconds before the next batch of prices
-		time.Sleep(2 * time.Second)
+		tick := models.PriceTick{
+			Ticker:    item.Symbol,
+			Price:     priceFloat,
+			Timestamp: time.Now(),
+		}
+
+		jsonData, err := json.Marshal(tick)
+		if err != nil {
+			continue
+		}
+
+		subject := "MARKET.prices." + item.Symbol
+		_, err = broker.JS.Publish(subject, jsonData)
+		if err != nil {
+			log.Printf("⚠️ Failed to publish to NATS: %v", err)
+		} else {
+			log.Printf("📡 REALTIME Published %s: $%.2f", item.Symbol, priceFloat)
+		}
 	}
 }
 
-// setupJetStream ensures the NATS stream exists before we try to publish to it
 func setupJetStream() {
 	streamName := "MARKET"
-	
-	// Check if the stream already exists
 	_, err := broker.JS.StreamInfo(streamName)
 	if err != nil {
-		// If it doesn't exist, create it. We tell it to listen for any subject starting with "MARKET.prices."
 		_, err = broker.JS.AddStream(&nats.StreamConfig{
 			Name:     streamName,
 			Subjects: []string{"MARKET.prices.*"},

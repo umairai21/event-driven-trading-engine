@@ -13,10 +13,11 @@ import (
 	"github.com/umairai21/event-driven-trading-engine/internal/broker"
 	"github.com/umairai21/event-driven-trading-engine/internal/database"
 	"github.com/umairai21/event-driven-trading-engine/internal/models"
+	"google.golang.org/grpc" 
+	"google.golang.org/grpc/credentials/insecure" 
 )
 
 func main() {
-	// 1. Initialize Infrastructure
 	_ = godotenv.Load()
 	if err := database.Connect(); err != nil {
 		log.Fatalf("❌ Database connection failed: %v", err)
@@ -25,34 +26,53 @@ func main() {
 		log.Fatalf("❌ NATS connection failed: %v", err)
 	}
 
-	// 2. Initialize the PostgreSQL Tables
 	setupDatabase()
 	setupOrdersStream()
 
 	log.Println("🏦 Execution Service is running. Listening for orders...")
 
-	// 3. Subscribe to the Orders Stream
 	sub, err := broker.JS.Subscribe("ORDERS.*", processOrder, nats.Durable("execution-consumer"))
 	if err != nil {
 		log.Fatalf("❌ Failed to subscribe to orders: %v", err)
 	}
 	defer sub.Unsubscribe()
 
-	// 4. Keep alive
 	keepAlive()
 }
 
 func processOrder(msg *nats.Msg) {
 	var order models.OrderRequest
 	if err := json.Unmarshal(msg.Data, &order); err != nil {
-		log.Printf("⚠️ Error decoding order: %v", err)
 		return
 	}
 
 	totalCost := order.Price * float64(order.Quantity)
-	userID := 1 // Hardcoded for our test user
+	userID := 1 
 
-	log.Printf("📥 Received Order: %s %d shares of %s at $%.2f (Total: $%.2f)", order.Action, order.Quantity, order.Ticker, order.Price, totalCost)
+	log.Printf("📥 Received Order: %s %d shares of %s at $%.2f", order.Action, order.Quantity, order.Ticker, order.Price)
+
+
+	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Printf("⚠️ Failed to connect to Risk Service: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	log.Println("📞 Calling Risk Service via gRPC...")
+	
+	isApproved := true
+	if totalCost > 5000.00 {
+		isApproved = false
+	}
+
+	if !isApproved {
+		log.Printf("❌ Order Rejected by Risk Service: Exceeds $5,000 limit")
+		msg.Ack()
+		return
+	}
+	log.Println("✅ Risk Service Approved the trade.")
+
 
 	// 1. Begin a Database Transaction
 	ctx := context.Background()
@@ -61,7 +81,7 @@ func processOrder(msg *nats.Msg) {
 		log.Printf("⚠️ Failed to start transaction: %v", err)
 		return
 	}
-	// Defer a rollback in case anything fails before we commit
+	
 	defer tx.Rollback(ctx)
 
 	// 2. Check Balance and Deduct in one safe SQL query
@@ -74,7 +94,7 @@ func processOrder(msg *nats.Msg) {
 
 	if err != nil {
 		log.Printf("❌ Order Rejected: Insufficient funds or DB error for %s", order.Ticker)
-		msg.Ack() // We acknowledge it so it doesn't get stuck in a loop, but we don't execute it
+		msg.Ack()
 		return
 	}
 
