@@ -1,0 +1,34 @@
+name: Backend CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21' # Standard recent Go version
+
+    - name: Install Dependencies
+      run: go mod tidy
+
+    - name: Build Microservices
+      run: |
+        echo "Building microservices to ensure no compile errors..."
+        go build -o bin/risk ./cmd/risk_service
+        go build -o bin/execution ./cmd/execution_service
+        go build -o bin/strategy ./cmd/strategy_engine
+        go build -o bin/market ./cmd/market_data
+
+    - name: Run Unit Tests
+      run: go test -v ./...
